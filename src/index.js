@@ -1,75 +1,177 @@
-import './css/styles.css';
-import debounce from 'lodash.debounce';
-import Notiflix from 'notiflix';
-import { fetchCountries } from './fetchCountries';
+import './style.css';
+import { Notify } from 'notiflix';
+import axios from 'axios';
+import SimpleLightbox from 'simplelightbox';
+import 'simplelightbox/dist/simple-lightbox.min.css';
 
-const DEBOUNCE_DELAY = 300;
+let searchQueryResult = '';
+let searchInput = '';
+let pageNumber = 1;
+let gallery = new SimpleLightbox('.gallery a');
 
-const input = document.getElementById('search-box');
-const countryList = document.querySelector('.country-list');
-const countryInfo = document.querySelector('.country-info');
+const pixabayAPI = {
+  baseUrl: 'https://pixabay.com/api/',
+  key: '33824136-a1de31ce3e31340e081d1e63a',
+  image_type: 'photo',
+  orientation: 'horizontal',
+  safesearch: 'true',
+  order: 'popular',
+  page: '1',
+  per_page: '40',
+};
 
-input.addEventListener('input', debounce(handleInputValue, DEBOUNCE_DELAY));
+const markupData = {
+  markup: '',
+  htmlCode: '',
+};
 
-function handleInputValue(event) {
-  const inputValue = event.target.value.trim();
-  if (!inputValue) {
-    cleanMarkup();
-    return;
-  } else {
-    fetchCountries(inputValue).then(onInputValueLength).catch(onError);
-  }
-}
+const searchForm = document.querySelector('.search-form');
+const gallerySelector = document.querySelector('.gallery');
 
-function onInputValueLength(data) {
-  if (data.length > 10) {
-    cleanMarkup();
-    Notiflix.Notify.info(
-      'Too many matches found. Please enter a more specific name.'
+searchForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  const {
+    elements: { searchQuery },
+  } = e.target;
+
+  searchQueryResult = searchQuery.value;
+
+  if (searchQueryResult === '') {
+    gallerySelector.innerHTML = '';
+    btnLoadMore.classList.remove('is-visible');
+    return Notify.failure(
+      'Sorry, there are no images matching your search query. Please try again.'
     );
-  } else if (data.length >= 2 && data.length <= 10) {
-    renderListOfCountries(data);
-  } else if (data.length === 1) {
-    renderCountry(...data);
-  } else {
-    throw new Error('Oops, there is no country with that name');
   }
-}
 
-function renderListOfCountries(arr) {
-  cleanMarkup();
-  const markup = arr.reduce(
-    (markup, country) => markup + createMarkup(country),
-    ''
+  if (searchQueryResult !== searchInput) {
+    pageNumber = 1;
+    pixabayAPI.page = `${pageNumber}`;
+    gallerySelector.innerHTML = '';
+    btnLoadMore.classList.remove('is-visible');
+  } else {
+    pageNumber += 1;
+    pixabayAPI.page = `${pageNumber}`;
+    btnLoadMore.classList.remove('is-visible');
+  }
+
+  searchInput = searchQueryResult;
+
+  try {
+    const results = await fetchPhotos(searchQueryResult);
+    markupData.htmlCode = await renderedPhotos(results);
+    gallerySelector.insertAdjacentHTML('beforeend', markupData.htmlCode);
+    btnLoadMore.classList.add('is-visible');
+
+    gallery.refresh();
+
+    const { page, per_page } = pixabayAPI;
+    const { totalHits } = results;
+    const totalPages = Math.ceil(totalHits / per_page);
+
+    if (page >= totalPages) {
+      btnLoadMore.classList.remove('is-visible');
+    }
+
+    Notify.success(`'Hooray! We found ${results.totalHits} images.'`);
+
+    console.log('results', results);
+  } catch (error) {
+    Notify.failure(
+      'Sorry, there are no images matching your search query. Please try again.'
+    );
+  }
+});
+
+const btnLoadMore = document.querySelector('.load-more');
+btnLoadMore.addEventListener('click', async () => {
+  pageNumber += 1;
+  pixabayAPI.page = `${pageNumber}`;
+
+  try {
+    const results = await fetchPhotos(searchQueryResult);
+    markupData.htmlCode = await renderedPhotos(results);
+    gallerySelector.insertAdjacentHTML('beforeend', markupData.htmlCode);
+    btnLoadMore.classList.add('is-visible');
+    gallery.refresh();
+
+    const { page, per_page } = pixabayAPI;
+    const { totalHits } = results;
+    const totalPages = Math.ceil(totalHits / per_page);
+
+    if (page >= totalPages) {
+      btnLoadMore.classList.remove('is-visible');
+    }
+  } catch (error) {
+    Notify.failure(
+      "We're sorry, but you've reached the end of search results."
+    );
+  }
+});
+
+async function fetchPhotos(searchQueryResult) {
+  const {
+    baseUrl,
+    key,
+    image_type,
+    orientation,
+    safesearch,
+    order,
+    page,
+    per_page,
+  } = pixabayAPI;
+
+  pixabayAPI.page = `${pageNumber}`;
+
+  const response = await axios.get(
+    `${baseUrl}?key=${key}&q=${searchInput}&image_type=${image_type}&orientation=${orientation}&safesearch=${safesearch}&order=${order}&page=${page}&per_page=${per_page}`
   );
-  countryList.innerHTML = markup;
+  const results = response.data;
+
+  const { total, totalHits } = results;
+  const totalPages = Math.ceil(totalHits / per_page);
+
+  if (total === 0) {
+    throw new Error();
+  }
+
+  if (page >= totalPages) {
+    btnLoadMore.classList.remove('is-visible');
+    Notify.failure(
+      "We're sorry, but you've reached the end of search results."
+    );
+    return results;
+  }
+
+  return results;
 }
 
-function createMarkup(countries) {
-  onClear();
-  const markup = countries
-    .map(({ flag, name }) => {
-      return `<li class="list container-text"><img src='${flag}' width="50" height="30"/><p class="text">${name}</p></li>`;
-    })
+async function renderedPhotos(results) {
+  const { hits } = results;
+
+  markupData.markup = hits
+    .map(
+      hit =>
+        `<a href="${hit.largeImageURL}"><div class="photo-card">
+        <img src="${hit.webformatURL}" alt="${hit.tags}" loading="lazy"
+          class="img-item" />
+        <div class="info">
+    <p class="info-item">
+      <b>Likes:</b>${hit.likes}
+    </p>
+    <p class="info-item">
+      <b>Views:</b>${hit.views}
+    </p>
+    <p class="info-item">
+      <b>Comments:</b>${hit.comments}
+    </p>
+    <p class="info-item">
+      <b>Downloads:</b>${hit.downloads}
+    </p>
+  </div>
+</div></a>`
+    )
     .join('');
-  countryList.insertAdjacentHTML('beforeend', markup);
-}
 
-function renderCountry({ name, capital, population, flag, languages }) {
-  cleanMarkup();
-  countryInfo.innerHTML = `
-  <div class="country-title"><img src="${flag}"width="50" height="30"><h2 class="country-name">${name}</h2></div><div class="country-property"><h3>Capital: </h3><p>${capital}</p></div><div class="country-property"><h3>Population: </h3><p>${population}</p></div><div class="country-property"><h3>Languages: </h3><p>${languages.map(
-    language => ` ${language.name}`
-  )}</p></div>
-  `;
-}
-
-function onError() {
-  cleanMarkup();
-  Notiflix.Notify.failure(`Oops, there is no country with that name`);
-}
-
-function cleanMarkup() {
-  countryList.innerHTML = '';
-  countryInfo.innerHTML = '';
+  return markupData.markup;
 }
